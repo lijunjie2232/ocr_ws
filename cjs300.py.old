@@ -1,0 +1,97 @@
+import fitz  # PyMuPDF
+import cv2
+import numpy as np
+from tqdm import tqdm
+from pathlib import Path
+
+
+# 第一步：将 PDF 的第一页转换为图片
+def pdf_to_image(
+    pdf_path,
+    page=-1,
+    outDir=None,
+    dpi=300,
+):
+    pdf_document = fitz.open(pdf_path)
+    pageList = {}
+    namePattern = "page_%0" + str(np.ceil(np.log10(len(pdf_document)))) + "d.png"
+    if page <= 0:  # return all pages
+        for idx, page in tqdm(enumerate(pdf_document)):
+            pageList[idx] = page.get_pixmap(dpi=dpi)
+    else:
+        idx = page - 1
+        assert isinstance(page, int) and page < len(
+            pdf_document
+        ), f"Invalid page number, specified page should between 1 and {len(pdf_document)}"
+        page = pdf_document[idx]  # 获取第一页
+        pageList[idx] = page.get_pixmap(dpi=dpi)
+    if outDir is not None:
+        for idx, page in pageList.items():
+            image_path = outDir / (namePattern % (idx + 1))
+            page.save(image_path)
+    return pageList
+
+
+# 第二步：处理图片，只保留浅蓝色字体
+def remove_black_keep_blue(
+    img=None,
+    imgDir=None,
+    outDir=None,
+    imgSuffix=[".png", ".jpg", ".jpeg", ".bmp"],
+):
+    imgList = []
+    if img is not None:
+        imgList.append(Path(img))
+    elif imgDir is not None:
+        imgDir = Path(imgDir)
+        outPattern = "%s.png" if outDir is not None else "%s_blue.png"
+        outDir = imgDir if outDir is None else Path(outDir)
+        imgList = imgDir.iterdir()
+    else:
+        raise ValueError("No image or image directory specified.")
+    for img in imgList:
+        if img.suffix.lower() not in imgSuffix:
+            continue
+        # 读取图片
+        image = cv2.imread(img)
+
+        # 转换为 HSV 色彩空间
+        hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+        # 定义蓝色的 HSV 范围（根据蓝色文字颜色调整范围）
+        lower_blue = np.array([80, 40, 90])  # 调整下限
+        upper_blue = np.array([130, 255, 255])  # 调整上限
+        blue_mask = cv2.inRange(hsv_image, lower_blue, upper_blue)
+
+        # 创建一个全白的图像
+        white_background = np.full_like(image, fill_value=255)
+
+        # 将蓝色部分覆盖到全白背景上
+        result = cv2.bitwise_and(image, image, mask=blue_mask)
+        result = cv2.add(result, white_background, mask=cv2.bitwise_not(blue_mask))
+
+        cropped_image = cv2.crop(image, (,), (, ))
+        # 保存结果
+        outPath = outDir / (outPattern % Path(img).stem)
+        cv2.imwrite(outPath, result)
+
+
+if __name__ == "__main__":
+    import shutil
+
+    ROOT = Path(__file__).resolve().parent
+    DPI = 300
+    pdf_path = ROOT / "cjs300.pdf"
+
+    TMPDIR = ROOT / "cjs300_tmp"
+    # delete file in TMPDIR
+    shutil.rmtree(TMPDIR, ignore_errors=True)
+    TMPDIR.mkdir(exist_ok=True, parents=True)
+
+    image_path = pdf_to_image(
+        pdf_path, page=1, outDir=TMPDIR, dpi=DPI
+    )  # 将 PDF 转换为图片
+
+    remove_black_keep_blue(imgDir=TMPDIR)  # 去除黑色字体，保留浅蓝色字体
+
+    print(f"处理完成，结果保存为：{TMPDIR}")
